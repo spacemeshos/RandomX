@@ -40,36 +40,44 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "../dataset.hpp"
 #include "../blake2/endian.h"
 #include "../common.hpp"
+#include "../jit_compiler.hpp"
 #include "../intrin_portable.h"
 #ifdef _WIN32
 #include <windows.h>
-#include <VersionHelpers.h>
+#include <versionhelpers.h>
 #endif
 #include "affinity.hpp"
 
-const uint8_t nonceTemplate[] = { 0x8b, 0xc3, 0xde, 0xd3, 0x4d, 0x2d, 0xcd, 0xee, 0x00, 0x00, 0x00, 0x00, 0xf9, 0x5c, 0xd2, 0x0c };
+const uint8_t nonceTemplate[] = {0x8b, 0xc3, 0xde, 0xd3, 0x4d, 0x2d, 0xcd, 0xee, 0x00, 0x00, 0x00, 0x00, 0xf9, 0x5c, 0xd2, 0x0c};
 
-class AtomicHash {
+class AtomicHash
+{
 public:
-	AtomicHash() {
+	AtomicHash()
+	{
 		hash.store(0);
 	}
-	void xorWith(uint64_t update) {
+	void xorWith(uint64_t update)
+	{
 		hash.fetch_xor(update);
 	}
-	void print(std::ostream& os) {
+	void print(std::ostream &os)
+	{
 		print(hash, os);
 		os << std::endl;
 	}
+
 private:
-	static void print(std::atomic<uint64_t>& hash, std::ostream& os) {
+	static void print(std::atomic<uint64_t> &hash, std::ostream &os)
+	{
 		auto h = hash.load();
-		outputHex(std::cout, (char*)&h, sizeof(h));
+		outputHex(std::cout, (char *)&h, sizeof(h));
 	}
 	std::atomic<uint64_t> hash;
 };
 
-void printUsage(const char* executable) {
+void printUsage(const char *executable)
+{
 	std::cout << "Usage: " << executable << " [OPTIONS]" << std::endl;
 	std::cout << "Supported options:" << std::endl;
 	std::cout << "  --help        shows this message" << std::endl;
@@ -87,74 +95,91 @@ void printUsage(const char* executable) {
 	std::cout << "  --ssse3       use optimized Argon2 for SSSE3 CPUs" << std::endl;
 	std::cout << "  --avx2        use optimized Argon2 for AVX2 CPUs" << std::endl;
 	std::cout << "  --auto        select the best options for the current CPU" << std::endl;
-	std::cout << "  --batch       process hashes as a batch" << std::endl;
+	std::cout << "  --noBatch     calculate hashes one by one (default: batch)" << std::endl;
 }
 
-struct MemoryException : public std::exception {
+struct MemoryException : public std::exception
+{
 };
-struct CacheAllocException : public MemoryException {
-	const char * what() const throw () {
+struct CacheAllocException : public MemoryException
+{
+	const char *what() const throw()
+	{
 		return "Cache allocation failed";
 	}
 };
-struct DatasetAllocException : public MemoryException {
-	const char * what() const throw () {
+struct DatasetAllocException : public MemoryException
+{
+	const char *what() const throw()
+	{
 		return "Dataset allocation failed";
 	}
 };
 
-struct HashResult {
+struct HashResult
+{
 	uint64_t result = UINT64_MAX;
 	uint32_t nonce;
 };
 
-using ThreadFunc = void(randomx_vm * vm, std::atomic<uint32_t> & atomicNonce, AtomicHash & result, uint32_t noncesCount, int thread, int cpuid, HashResult & bestResult);
+using MineFunc = void(randomx_vm *vm, std::atomic<uint32_t> &atomicNonce, AtomicHash &result, uint32_t noncesCount, int thread, int cpuid, HashResult &bestResult);
 
-template<bool batch>
-void mine(randomx_vm* vm, std::atomic<uint32_t>& atomicNonce, AtomicHash& result, uint32_t noncesCount, int thread, int cpuid, HashResult& bestResult) {
-	if (cpuid >= 0) {
+template <bool batch>
+void mine(randomx_vm *vm, std::atomic<uint32_t> &atomicNonce, AtomicHash &result, uint32_t noncesCount, int thread, int cpuid, HashResult &bestResult)
+{
+	if (cpuid >= 0)
+	{
 		int rc = set_thread_affinity(cpuid);
-		if (rc) {
-			std::cerr << "Failed to set thread affinity for thread " << thread << " (error=" << rc << ")" <<  std::endl;
+		if (rc)
+		{
+			std::cerr << "Failed to set thread affinity for thread " << thread << " (error=" << rc << ")" << std::endl;
 		}
 	}
 
 	uint8_t fullNonce[sizeof(nonceTemplate)];
 	memcpy(fullNonce, nonceTemplate, sizeof(nonceTemplate));
-	void* noncePtr = fullNonce + 8;
+	void *noncePtr = fullNonce + 8;
 	uint32_t nonce = atomicNonce.fetch_add(1);
 	uint32_t prevNonce;
 
-	if (batch) {
+	if (batch)
+	{
 		store32(noncePtr, nonce);
 		randomx_calculate_hash_first(vm, fullNonce, sizeof(fullNonce));
 	}
 
-	while (nonce < noncesCount) {
+	while (nonce < noncesCount)
+	{
 		prevNonce = nonce;
-		if (batch) {
+		if (batch)
+		{
 			nonce = atomicNonce.fetch_add(1);
 		}
 		store32(noncePtr, nonce);
 		auto hash = (batch ? randomx_calculate_numeric_next : randomx_calculate_numeric)(vm, fullNonce, sizeof(fullNonce));
-		//result.xorWith(hash);
-		if (hash < bestResult.result) {
+		// result.xorWith(hash);
+		if (hash < bestResult.result)
+		{
 			bestResult.result = hash;
 			bestResult.nonce = (batch ? prevNonce : nonce);
 		}
-		if (!batch) {
+		if (!batch)
+		{
 			nonce = atomicNonce.fetch_add(1);
 		}
 	}
 }
 
-int validateResult(randomx_vm* vm, uint64_t effort, void* nonce) {
+int validateResult(randomx_vm *vm, uint64_t effort, void *nonce)
+{
 	uint64_t result = randomx_calculate_numeric(vm, nonce, sizeof(nonceTemplate));
 	return mulh(effort, result) == 0;
 }
 
-int main(int argc, char** argv) {
-	bool softAes, miningMode, verificationMode, help, largePages, jit, secure, ssse3, avx2, autoFlags, batch;
+int main(int argc, char **argv)
+{
+	bool softAes, miningMode, verificationMode, help, largePages, jit, secure;
+	bool ssse3, avx2, autoFlags, noBatch;
 	int noncesCount, threadCount, initThreadCount;
 	uint64_t threadAffinity;
 	int32_t seedValue;
@@ -169,7 +194,8 @@ int main(int argc, char** argv) {
 	readIntOption("--init", argc, argv, initThreadCount, 1);
 	readIntOption("--seed", argc, argv, seedValue, 0);
 	readOption("--largePages", argc, argv, largePages);
-	if (!largePages) {
+	if (!largePages)
+	{
 		readOption("--largepages", argc, argv, largePages);
 	}
 	readOption("--jit", argc, argv, jit);
@@ -178,18 +204,20 @@ int main(int argc, char** argv) {
 	readOption("--ssse3", argc, argv, ssse3);
 	readOption("--avx2", argc, argv, avx2);
 	readOption("--auto", argc, argv, autoFlags);
-	readOption("--batch", argc, argv, batch);
+	readOption("--noBatch", argc, argv, noBatch);
 
 	store32(&seed, seedValue);
 
 	std::cout << "RandomX-TOR-v1 benchmark" << std::endl;
 
-	if (help) {
+	if (help)
+	{
 		printUsage(argv[0]);
 		return 0;
 	}
 
-	if (!miningMode && !verificationMode) {
+	if (!miningMode && !verificationMode)
+	{
 		std::cout << "Please select either the fast mode (--mine) or the slow mode (--verify)" << std::endl;
 		std::cout << "Run '" << argv[0] << " --help' to see all supported options" << std::endl;
 		return 0;
@@ -197,101 +225,126 @@ int main(int argc, char** argv) {
 
 	std::atomic<uint32_t> atomicNonce(0);
 	AtomicHash result;
-	std::vector<randomx_vm*> vms;
+	std::vector<randomx_vm *> vms;
 	std::vector<std::thread> threads;
-	randomx_dataset* dataset;
-	randomx_cache* cache;
+	randomx_dataset *dataset;
+	randomx_cache *cache;
 	randomx_flags flags;
 	std::vector<HashResult> results;
-	ThreadFunc* workerFunc;
 
-	if (autoFlags) {
+	if (autoFlags)
+	{
 		initThreadCount = std::thread::hardware_concurrency();
 		flags = randomx_get_flags();
 	}
-	else {
+	else
+	{
 		flags = RANDOMX_FLAG_DEFAULT;
-		if (ssse3) {
+		if (ssse3)
+		{
 			flags |= RANDOMX_FLAG_ARGON2_SSSE3;
 		}
-		if (avx2) {
+		if (avx2)
+		{
 			flags |= RANDOMX_FLAG_ARGON2_AVX2;
 		}
-		if (!softAes) {
+		if (!softAes)
+		{
 			flags |= RANDOMX_FLAG_HARD_AES;
 		}
-		if (jit) {
+		if (jit)
+		{
 			flags |= RANDOMX_FLAG_JIT;
-#ifdef __OpenBSD__
+#ifdef RANDOMX_FORCE_SECURE
 			flags |= RANDOMX_FLAG_SECURE;
 #endif
 		}
 	}
 
-	if (largePages) {
+	if (largePages)
+	{
 		flags |= RANDOMX_FLAG_LARGE_PAGES;
 	}
-	if (miningMode) {
+	if (miningMode)
+	{
 		flags |= RANDOMX_FLAG_FULL_MEM;
 	}
-#ifndef __OpenBSD__
-	if (secure) {
+#ifndef RANDOMX_FORCE_SECURE
+	if (secure)
+	{
 		flags |= RANDOMX_FLAG_SECURE;
 	}
 #endif
 
-	if (flags & RANDOMX_FLAG_ARGON2_AVX2) {
+	if (flags & RANDOMX_FLAG_ARGON2_AVX2)
+	{
 		std::cout << " - Argon2 implementation: AVX2" << std::endl;
 	}
-	else if (flags & RANDOMX_FLAG_ARGON2_SSSE3) {
+	else if (flags & RANDOMX_FLAG_ARGON2_SSSE3)
+	{
 		std::cout << " - Argon2 implementation: SSSE3" << std::endl;
 	}
-	else {
+	else
+	{
 		std::cout << " - Argon2 implementation: reference" << std::endl;
 	}
 
-	if (flags & RANDOMX_FLAG_FULL_MEM) {
+	if (flags & RANDOMX_FLAG_FULL_MEM)
+	{
 		std::cout << " - full memory mode (1040 MiB)" << std::endl;
 	}
-	else {
+	else
+	{
 		std::cout << " - light memory mode (256 MiB)" << std::endl;
 	}
 
-	if (flags & RANDOMX_FLAG_JIT) {
+	if (flags & RANDOMX_FLAG_JIT)
+	{
 		std::cout << " - JIT compiled mode ";
-		if (flags & RANDOMX_FLAG_SECURE) {
+		if (flags & RANDOMX_FLAG_SECURE)
+		{
 			std::cout << "(secure)";
 		}
 		std::cout << std::endl;
 	}
-	else {
+	else
+	{
 		std::cout << " - interpreted mode" << std::endl;
 	}
 
-	if (flags & RANDOMX_FLAG_HARD_AES) {
+	if (flags & RANDOMX_FLAG_HARD_AES)
+	{
 		std::cout << " - hardware AES mode" << std::endl;
 	}
-	else {
+	else
+	{
 		std::cout << " - software AES mode" << std::endl;
 	}
 
-	if (flags & RANDOMX_FLAG_LARGE_PAGES) {
+	if (flags & RANDOMX_FLAG_LARGE_PAGES)
+	{
 		std::cout << " - large pages mode" << std::endl;
 	}
-	else {
+	else
+	{
 		std::cout << " - small pages mode" << std::endl;
 	}
 
-	if (threadAffinity) {
+	if (threadAffinity)
+	{
 		std::cout << " - thread affinity (" << mask_to_string(threadAffinity) << ")" << std::endl;
 	}
 
-	if (batch) {
-		workerFunc = &mine<true>;
-		std::cout << " - batch mode" << std::endl;
+	MineFunc *func;
+
+	if (noBatch)
+	{
+		func = &mine<false>;
 	}
-	else {
-		workerFunc = &mine<false>;
+	else
+	{
+		func = &mine<true>;
+		std::cout << " - batch mode" << std::endl;
 	}
 
 	std::cout << "Initializing";
@@ -299,43 +352,54 @@ int main(int argc, char** argv) {
 		std::cout << " (" << initThreadCount << " thread" << (initThreadCount > 1 ? "s)" : ")");
 	std::cout << " ..." << std::endl;
 
-	try {
-		if (nullptr == randomx::selectArgonImpl(flags)) {
+	try
+	{
+		if (nullptr == randomx::selectArgonImpl(flags))
+		{
 			throw std::runtime_error("Unsupported Argon2 implementation");
 		}
-		if ((flags & RANDOMX_FLAG_JIT) && !RANDOMX_HAVE_COMPILER) {
+		if ((flags & RANDOMX_FLAG_JIT) && !RANDOMX_HAVE_COMPILER)
+		{
 			throw std::runtime_error("JIT compilation is not supported on this platform. Try without --jit");
 		}
-		if (!(flags & RANDOMX_FLAG_JIT) && RANDOMX_HAVE_COMPILER) {
+		if (!(flags & RANDOMX_FLAG_JIT) && RANDOMX_HAVE_COMPILER)
+		{
 			std::cout << "WARNING: You are using the interpreter mode. Use --jit for optimal performance." << std::endl;
 		}
 
 		Stopwatch sw(true);
 		cache = randomx_alloc_cache(flags);
-		if (cache == nullptr) {
+		if (cache == nullptr)
+		{
 			throw CacheAllocException();
 		}
 		randomx_init_cache(cache, &seed, sizeof(seed));
-		if (miningMode) {
+		if (miningMode)
+		{
 			dataset = randomx_alloc_dataset(flags);
-			if (dataset == nullptr) {
+			if (dataset == nullptr)
+			{
 				throw DatasetAllocException();
 			}
 			uint32_t datasetItemCount = randomx_dataset_item_count();
-			if (initThreadCount > 1) {
+			if (initThreadCount > 1)
+			{
 				auto perThread = datasetItemCount / initThreadCount;
 				auto remainder = datasetItemCount % initThreadCount;
 				uint32_t startItem = 0;
-				for (int i = 0; i < initThreadCount; ++i) {
+				for (int i = 0; i < initThreadCount; ++i)
+				{
 					auto count = perThread + (i == initThreadCount - 1 ? remainder : 0);
 					threads.push_back(std::thread(&randomx_init_dataset, dataset, cache, startItem, count));
 					startItem += count;
 				}
-				for (unsigned i = 0; i < threads.size(); ++i) {
+				for (unsigned i = 0; i < threads.size(); ++i)
+				{
 					threads[i].join();
 				}
 			}
-			else {
+			else
+			{
 				randomx_init_dataset(dataset, cache, 0, datasetItemCount);
 			}
 			randomx_release_cache(cache);
@@ -344,13 +408,17 @@ int main(int argc, char** argv) {
 		}
 		std::cout << "Memory initialized in " << sw.getElapsed() << " s" << std::endl;
 		std::cout << "Initializing " << threadCount << " virtual machine(s) ..." << std::endl;
-		for (int i = 0; i < threadCount; ++i) {
+		for (int i = 0; i < threadCount; ++i)
+		{
 			randomx_vm *vm = randomx_create_vm(flags, cache, dataset);
-			if (vm == nullptr) {
-				if ((flags & RANDOMX_FLAG_HARD_AES)) {
+			if (vm == nullptr)
+			{
+				if ((flags & RANDOMX_FLAG_HARD_AES))
+				{
 					throw std::runtime_error("Cannot create VM with the selected options. Try using --softAes");
 				}
-				if (largePages) {
+				if (largePages)
+				{
 					throw std::runtime_error("Cannot create VM with the selected options. Try without --largePages");
 				}
 				throw std::runtime_error("Cannot create VM");
@@ -360,26 +428,32 @@ int main(int argc, char** argv) {
 		}
 		std::cout << "Running benchmark (" << noncesCount << " nonces) ..." << std::endl;
 		sw.restart();
-		if (threadCount > 1) {
-			for (unsigned i = 0; i < vms.size(); ++i) {
+		if (threadCount > 1)
+		{
+			for (unsigned i = 0; i < vms.size(); ++i)
+			{
 				int cpuid = -1;
 				if (threadAffinity)
 					cpuid = cpuid_from_mask(threadAffinity, i);
-				threads.push_back(std::thread(workerFunc, vms[i], std::ref(atomicNonce), std::ref(result), noncesCount, i, cpuid, std::ref(results[i])));
+				threads.push_back(std::thread(func, vms[i], std::ref(atomicNonce), std::ref(result), noncesCount, i, cpuid, std::ref(results[i])));
 			}
-			for (unsigned i = 0; i < threads.size(); ++i) {
+			for (unsigned i = 0; i < threads.size(); ++i)
+			{
 				threads[i].join();
 			}
 		}
-		else {
-			workerFunc(vms[0], std::ref(atomicNonce), std::ref(result), noncesCount, 0, -1, std::ref(results[0]));
+		else
+		{
+			func(vms[0], std::ref(atomicNonce), std::ref(result), noncesCount, 0, -1, std::ref(results[0]));
 		}
 
 		double elapsed = sw.getElapsed();
 		std::cout << "Performance: " << noncesCount / elapsed << " hashes per second" << std::endl;
 		HashResult bestResult;
-		for (auto& result : results) {
-			if (result.result < bestResult.result) {
+		for (auto &result : results)
+		{
+			if (result.result < bestResult.result)
+			{
 				bestResult = result;
 			}
 		}
@@ -390,10 +464,10 @@ int main(int argc, char** argv) {
 		memcpy(nonce, nonceTemplate, sizeof(nonceTemplate));
 		store32(nonce + 8, bestResult.nonce);
 		std::cout << "  Nonce: ";
-		outputHex(std::cout, (const char*)nonce, sizeof(nonce));
+		outputHex(std::cout, (const char *)nonce, sizeof(nonce));
 		std::cout << std::endl;
 		std::cout << "  Result: ";
-		outputHex(std::cout, (char*)&bestResult.result, sizeof(bestResult.result));
+		outputHex(std::cout, (char *)&bestResult.result, sizeof(bestResult.result));
 		std::cout << std::endl;
 		std::cout << "  Effort: " << effort << std::endl;
 		std::cout << "  Valid: " << validateResult(vms[0], effort, nonce) << std::endl;
@@ -405,12 +479,15 @@ int main(int argc, char** argv) {
 		else
 			randomx_release_cache(cache);
 	}
-	catch (MemoryException& e) {
+	catch (MemoryException &e)
+	{
 		std::cout << "ERROR: " << e.what() << std::endl;
-		if (largePages) {
+		if (largePages)
+		{
 #ifdef _WIN32
 			std::cout << "To use large pages, please enable the \"Lock Pages in Memory\" policy and reboot." << std::endl;
-			if (!IsWindows8OrGreater()) {
+			if (!IsWindows8OrGreater())
+			{
 				std::cout << "Additionally, you have to run the benchmark from elevated command prompt." << std::endl;
 			}
 #else
@@ -419,7 +496,8 @@ int main(int argc, char** argv) {
 		}
 		return 1;
 	}
-	catch (std::exception& e) {
+	catch (std::exception &e)
+	{
 		std::cout << "ERROR: " << e.what() << std::endl;
 		return 1;
 	}
