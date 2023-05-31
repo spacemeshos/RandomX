@@ -29,25 +29,21 @@ void initCache(const char (&key)[N])
 }
 
 template <size_t K, size_t H>
-void calcStringHash(const char (&key)[K], const char (&input)[H], void *output)
+uint64_t calcStringHash(const char (&key)[K], const char (&input)[H])
 {
 	initCache(key);
 	assert(vm != nullptr);
-#if RANDOMX_HASH_SIZE == 32
-	randomx_calculate_hash(vm, input, H - 1, output);
-#endif
+	return randomx_calculate_numeric(vm, input, H - 1);
 }
 
 template <size_t K, size_t H>
-void calcHexHash(const char (&key)[K], const char (&hex)[H], void *output)
+uint64_t calcHexHash(const char (&key)[K], const char (&hex)[H])
 {
 	initCache(key);
 	assert(vm != nullptr);
 	char input[H / 2];
 	hex2bin((char *)hex, H - 1, input);
-#if RANDOMX_HASH_SIZE == 32
-	randomx_calculate_hash(vm, input, sizeof(input), output);
-#endif
+	return randomx_calculate_numeric(vm, input, sizeof(input));
 }
 
 int testNo = 0;
@@ -973,51 +969,35 @@ int main()
 
 	auto test_a = [&]
 	{
-		char hash[RANDOMX_HASH_SIZE];
-		calcStringHash("test key 000", "This is a test", &hash);
-		assert(equalsHex(hash, "639183aae1bf4c9a35884cb46b09cad9175f04efd7684e7262a0ac1c2f0b4e3f"));
+		auto hash = calcStringHash("test key 000", "This is a test");
+		assert(hash == 2705037248115674124);
 	};
 
 	auto test_b = [&]
 	{
-		char hash[RANDOMX_HASH_SIZE];
-		calcStringHash("test key 000", "Lorem ipsum dolor sit amet", &hash);
-		assert(equalsHex(hash, "300a0adb47603dedb42228ccb2b211104f4da45af709cd7547cd049e9489c969"));
+		auto hash = calcStringHash("test key 000", "Lorem ipsum dolor sit amet");
+		assert(hash == 9395832178737531964);
 	};
 
 	auto test_c = [&]
 	{
-		char hash[RANDOMX_HASH_SIZE];
-		calcStringHash("test key 000", "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua", &hash);
-		assert(equalsHex(hash, "c36d4ed4191e617309867ed66a443be4075014e2b061bcdaf9ce7b721d2b77a8"));
+		auto hash = calcStringHash("test key 000", "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua");
+		assert(hash == 1276421477095602454);
 	};
 
 	auto test_d = [&]
 	{
-		char hash[RANDOMX_HASH_SIZE];
-		calcStringHash("test key 001", "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua", &hash);
-		assert(equalsHex(hash, "e9ff4503201c0c2cca26d285c93ae883f9b1d30c9eb240b820756f2d5a7905fc"));
+		auto hash = calcStringHash("test key 001", "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua");
+		assert(hash == 4700193635115746148);
 	};
 
-	auto test_e = [&]
-	{
-		char hash[RANDOMX_HASH_SIZE];
-		calcHexHash("test key 001", "0b0b98bea7e805e0010a2126d287a2a0cc833d312cb786385a7c2f9de69d25537f584a9bc9977b00000000666fd8753bf61a8631f12984e3fd44f4014eca629276817b56f32e9b68bd82f416", &hash);
-		// std::cout << std::endl;
-		// outputHex(std::cout, (const char*)hash, sizeof(hash));
-		// std::cout << std::endl;
-		assert(equalsHex(hash, "c56414121acda1713c2f2a819d8ae38aed7c80c35c2a769298d34f03833cd5f1"));
-	};
+	runTest("Hash test 1a (interpreter)", stringsEqual(RANDOMX_ARGON_SALT, "RandomX-TOR-v1"), test_a);
 
-	runTest("Hash test 1a (interpreter)", stringsEqual(RANDOMX_ARGON_SALT, "RandomX\x03"), test_a);
+	runTest("Hash test 1b (interpreter)", stringsEqual(RANDOMX_ARGON_SALT, "RandomX-TOR-v1"), test_b);
 
-	runTest("Hash test 1b (interpreter)", stringsEqual(RANDOMX_ARGON_SALT, "RandomX\x03"), test_b);
+	runTest("Hash test 1c (interpreter)", stringsEqual(RANDOMX_ARGON_SALT, "RandomX-TOR-v1"), test_c);
 
-	runTest("Hash test 1c (interpreter)", stringsEqual(RANDOMX_ARGON_SALT, "RandomX\x03"), test_c);
-
-	runTest("Hash test 1d (interpreter)", stringsEqual(RANDOMX_ARGON_SALT, "RandomX\x03"), test_d);
-
-	runTest("Hash test 1e (interpreter)", stringsEqual(RANDOMX_ARGON_SALT, "RandomX\x03"), test_e);
+	runTest("Hash test 1d (interpreter)", stringsEqual(RANDOMX_ARGON_SALT, "RandomX-TOR-v1"), test_d);
 
 	if (RANDOMX_HAVE_COMPILER)
 	{
@@ -1033,15 +1013,13 @@ int main()
 #endif
 	}
 
-	runTest("Hash test 2a (compiler)", RANDOMX_HAVE_COMPILER && stringsEqual(RANDOMX_ARGON_SALT, "RandomX\x03"), test_a);
+	runTest("Hash test 2a (compiler)", RANDOMX_HAVE_COMPILER && stringsEqual(RANDOMX_ARGON_SALT, "RandomX-TOR-v1"), test_a);
 
-	runTest("Hash test 2b (compiler)", RANDOMX_HAVE_COMPILER && stringsEqual(RANDOMX_ARGON_SALT, "RandomX\x03"), test_b);
+	runTest("Hash test 2b (compiler)", RANDOMX_HAVE_COMPILER && stringsEqual(RANDOMX_ARGON_SALT, "RandomX-TOR-v1"), test_b);
 
-	runTest("Hash test 2c (compiler)", RANDOMX_HAVE_COMPILER && stringsEqual(RANDOMX_ARGON_SALT, "RandomX\x03"), test_c);
+	runTest("Hash test 2c (compiler)", RANDOMX_HAVE_COMPILER && stringsEqual(RANDOMX_ARGON_SALT, "RandomX-TOR-v1"), test_c);
 
-	runTest("Hash test 2d (compiler)", RANDOMX_HAVE_COMPILER && stringsEqual(RANDOMX_ARGON_SALT, "RandomX\x03"), test_d);
-
-	runTest("Hash test 2e (compiler)", RANDOMX_HAVE_COMPILER && stringsEqual(RANDOMX_ARGON_SALT, "RandomX\x03"), test_e);
+	runTest("Hash test 2d (compiler)", RANDOMX_HAVE_COMPILER && stringsEqual(RANDOMX_ARGON_SALT, "RandomX-TOR-v1"), test_d);
 
 	auto flags = randomx_get_flags();
 
